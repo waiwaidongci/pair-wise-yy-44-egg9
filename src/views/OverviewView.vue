@@ -60,11 +60,44 @@ const nextCues = computed(() => [...store.cues].sort((a, b) => a.time.localeComp
         <small>跨部门协同处理中</small>
       </article>
       <article class="metric">
+        <span>待处置冲突</span>
+        <strong class="red">{{ store.pendingConflictCount }}</strong>
+        <small>两边都改过，留两份</small>
+      </article>
+      <article class="metric">
         <span>计划时长</span>
         <strong>{{ totalMinutes }}<small> 分</small></strong>
         <small>当前版本 {{ store.revision }}</small>
       </article>
     </div>
+
+    <el-alert
+      v-if="store.pendingConflictCount"
+      class="handover-alert"
+      type="error"
+      show-icon
+      :closable="false"
+      :title="`${store.pendingConflictCount} 项冲突待处置，未处置不进基线或打印清单`"
+      description="离线改动回网后与主控版本两边都改过，已留两份待处置。请前往场次交接中心处置。"
+    >
+      <div class="handover-alert-actions">
+        <el-button size="small" type="primary" @click="$router.push('/handover')">前往场次交接</el-button>
+      </div>
+    </el-alert>
+
+    <el-alert
+      v-if="store.printStale"
+      class="handover-alert"
+      type="warning"
+      show-icon
+      :closable="false"
+      title="打印内容已失效，需重算"
+      description="时间、路线或部门已变更，相关确认与打印内容立即失效。"
+    >
+      <div class="handover-alert-actions">
+        <el-button size="small" type="warning" @click="$router.push('/print')">前往打印中心重算</el-button>
+      </div>
+    </el-alert>
 
     <div class="overview-grid">
       <section class="panel">
@@ -115,6 +148,14 @@ const nextCues = computed(() => [...store.cues].sort((a, b) => a.time.localeComp
 
 .red {
   color: #bd4b3f !important;
+}
+
+.handover-alert {
+  margin-bottom: 14px;
+}
+
+.handover-alert-actions {
+  margin-top: 8px;
 }
 
 .overview-grid {

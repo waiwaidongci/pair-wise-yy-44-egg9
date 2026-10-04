@@ -145,7 +145,11 @@ function updateCue(key: keyof Cue, value: unknown) {
               <span>{{ cue.id }} · {{ cue.act }}</span>
               <h3>{{ cue.title }}</h3>
             </div>
-            <el-tag :type="cue.status === '已确认' ? 'success' : 'warning'" effect="plain">{{ cue.status }}</el-tag>
+            <div class="editor-tags">
+              <el-tag v-if="cue.conflictState === '待处置'" type="danger" effect="dark">冲突待处置</el-tag>
+              <el-tag v-else-if="cue.invalidAt" type="warning" effect="plain">已失效</el-tag>
+              <el-tag :type="cue.status === '已确认' ? 'success' : 'warning'" effect="plain">{{ cue.status }}</el-tag>
+            </div>
           </div>
 
           <el-form label-position="top" size="small" :disabled="store.locked">
@@ -217,6 +221,11 @@ function updateCue(key: keyof Cue, value: unknown) {
           <span>{{ item.id }} · {{ item.department }}</span>
           <strong>{{ item.title }}</strong>
           <small>{{ item.time }} · {{ item.duration }} 秒</small>
+          <div v-if="item.conflictState === '待处置' || item.offlineEdited || item.invalidAt" class="card-flags">
+            <em v-if="item.conflictState === '待处置'" class="flag conflict">冲突待处置</em>
+            <em v-if="item.invalidAt" class="flag invalid">已失效</em>
+            <em v-if="item.offlineEdited" class="flag offline">离线改动</em>
+          </div>
         </button>
       </div>
     </section>
@@ -430,6 +439,12 @@ function updateCue(key: keyof Cue, value: unknown) {
   font-size: 18px;
 }
 
+.editor-tags {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -543,6 +558,35 @@ function updateCue(key: keyof Cue, value: unknown) {
   display: block;
   margin: 6px 0;
   font-size: 13px;
+}
+
+.card-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.flag {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-style: normal;
+}
+
+.flag.conflict {
+  color: #bd4b3f;
+  background: #fbeae7;
+}
+
+.flag.invalid {
+  color: #b77014;
+  background: #fdf3e0;
+}
+
+.flag.offline {
+  color: #2f6fb0;
+  background: #e8f0fb;
 }
 
 @media (max-width: 1080px) {

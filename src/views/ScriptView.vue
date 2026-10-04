@@ -16,13 +16,13 @@ const script = computed(() =>
 
 function confirmCue(id: string) {
   store.selectedId = id
-  store.updateCue({ status: '已确认' })
+  store.confirmCue(id)
   ElMessage.success(`${id} 已并入当前排练脚本`)
 }
 
 function lock() {
-  store.lockBaseline()
-  ElMessage.success('演出基线已锁定，后续修改将从新分支开始')
+  const result = store.lockBaseline()
+  ElMessage.success(`基线已锁定：${result.included} 项入基线，${result.excluded} 项未处置不进基线`)
 }
 </script>
 
@@ -67,9 +67,13 @@ function lock() {
                 <span>{{ cue.id }} · {{ cue.act }} / {{ cue.scene }}</span>
                 <h3>{{ cue.title }}</h3>
               </div>
-              <el-tag :type="cue.status === '已确认' ? 'success' : cue.status === '待确认' ? 'warning' : 'info'" effect="plain">
-                {{ cue.status }}
-              </el-tag>
+              <div class="card-tags">
+                <el-tag v-if="cue.conflictState === '待处置'" type="danger" effect="dark">冲突待处置</el-tag>
+                <el-tag v-else-if="cue.invalidAt" type="warning" effect="plain">已失效</el-tag>
+                <el-tag :type="cue.status === '已确认' ? 'success' : cue.status === '待确认' ? 'warning' : 'info'" effect="plain">
+                  {{ cue.status }}
+                </el-tag>
+              </div>
             </div>
             <p>{{ cue.note || '暂无补充说明' }}</p>
             <div class="script-meta">
@@ -77,10 +81,18 @@ function lock() {
               <span>部门：{{ cue.department }}</span>
               <span>路线：{{ cue.route.length }} 节点</span>
               <span v-if="cue.comments.length">留言：{{ cue.comments.length }}</span>
+              <span v-if="cue.baselineId">基准号：{{ cue.baselineId }}</span>
             </div>
             <div class="script-actions">
               <el-button size="small" @click="store.selectedId = cue.id; $router.push('/stage')">编辑走位</el-button>
-              <el-button v-if="cue.status !== '已确认'" size="small" type="primary" plain @click="confirmCue(cue.id)">确认节点</el-button>
+              <el-button
+                v-if="cue.status !== '已确认' && cue.conflictState !== '待处置'"
+                size="small"
+                type="primary"
+                plain
+                @click="confirmCue(cue.id)"
+              >确认节点</el-button>
+              <span v-else-if="cue.conflictState === '待处置'" class="conflict-hint">冲突处置后可确认</span>
               <span v-else class="confirmed">已纳入 {{ store.revision }}</span>
             </div>
           </div>
@@ -215,6 +227,12 @@ function lock() {
 .script-card h3 {
   margin: 5px 0 0;
   font-size: 15px;
+}
+
+.card-tags {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
 }
 
 .script-card > p {

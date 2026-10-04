@@ -13,6 +13,7 @@ const nav = [
   { to: '/stage', label: '舞台走位', icon: '图' },
   { to: '/script', label: '排练脚本', icon: '序' },
   { to: '/print', label: '打印中心', icon: '印' },
+  { to: '/handover', label: '场次交接', icon: '交' },
 ]
 </script>
 
@@ -43,6 +44,9 @@ const nav = [
         >
           <span class="nav-icon">{{ item.icon }}</span>
           {{ item.label }}
+          <em v-if="item.to === '/handover' && store.pendingConflictCount" class="nav-badge">
+            {{ store.pendingConflictCount }}
+          </em>
         </RouterLink>
       </nav>
 
@@ -146,6 +150,16 @@ const nav = [
   border: 1px solid rgb(255 255 255 / 18%);
   border-radius: 6px;
   font-size: 11px;
+}
+
+.nav-badge {
+  margin-left: auto;
+  padding: 1px 7px;
+  border-radius: 9px;
+  color: #fff;
+  background: #cf5b3f;
+  font-size: 11px;
+  font-style: normal;
 }
 
 .side-card {

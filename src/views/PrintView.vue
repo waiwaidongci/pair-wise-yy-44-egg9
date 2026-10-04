@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useWorkshopStore } from '../stores/workshop'
 
@@ -8,6 +8,18 @@ const includeNotes = ref(true)
 const includeRoutes = ref(true)
 const includeComments = ref(false)
 
+const excluded = computed(() => store.cues.filter((cue) => !store.printCues.some((p) => p.id === cue.id)))
+const excludedReasons = computed(() => {
+  const reasons: string[] = []
+  const pending = store.cues.filter((cue) => cue.status !== '已确认').length
+  const conflict = store.cues.filter((cue) => cue.conflictState === '待处置').length
+  const invalid = store.cues.filter((cue) => cue.invalidAt && cue.status === '已确认').length
+  if (pending) reasons.push(`${pending} 项未确认`)
+  if (conflict) reasons.push(`${conflict} 项冲突待处置`)
+  if (invalid) reasons.push(`${invalid} 项已失效`)
+  return reasons
+})
+
 function print() {
   window.print()
 }
@@ -15,7 +27,7 @@ function print() {
 function exportCsv() {
   const rows = [
     ['编号', '时间码', '场景', '提示', '部门', '责任', '路线节点', '状态'],
-    ...store.cues.map((cue) => [
+    ...store.printCues.map((cue) => [
       cue.id,
       cue.time,
       `${cue.act}/${cue.scene}`,
@@ -56,8 +68,34 @@ function exportCsv() {
       <el-checkbox v-model="includeNotes">执行说明</el-checkbox>
       <el-checkbox v-model="includeRoutes">路线坐标</el-checkbox>
       <el-checkbox v-model="includeComments">未解决留言</el-checkbox>
-      <span class="print-revision">版本 {{ store.revision }} · 生成于 {{ new Date().toLocaleString('zh-CN') }}</span>
+      <span class="print-revision">
+        版本 {{ store.revision }} · 生成于 {{ store.printGeneratedAt ? new Date(store.printGeneratedAt).toLocaleString('zh-CN') : '尚未生成' }}
+      </span>
     </div>
+
+    <el-alert
+      v-if="store.printStale"
+      class="stale-alert no-print"
+      type="warning"
+      show-icon
+      :closable="false"
+      title="打印内容已失效，需重算"
+      description="时间、路线或部门已变更，相关确认与打印内容立即失效。请重算后再打印或导出。"
+    >
+      <div class="stale-actions">
+        <el-button size="small" type="warning" @click="store.recomputePrint">重算打印内容</el-button>
+      </div>
+    </el-alert>
+
+    <el-alert
+      v-if="excluded.length"
+      class="excluded-alert no-print"
+      type="info"
+      show-icon
+      :closable="false"
+      :title="`${excluded.length} 项提示未进入打印清单`"
+      :description="`未处置的提示不进基线或打印清单：${excludedReasons.join('；')}。`"
+    />
 
     <article class="print-sheet">
       <header class="sheet-head">
@@ -84,7 +122,7 @@ function exportCsv() {
           </tr>
         </thead>
         <tbody>
-          <tr v-for="cue in [...store.cues].sort((a, b) => a.time.localeCompare(b.time))" :key="cue.id">
+          <tr v-for="cue in [...store.printCues].sort((a, b) => a.time.localeCompare(b.time))" :key="cue.id">
             <td class="mono">{{ cue.time }}</td>
             <td>{{ cue.act }} / {{ cue.scene }}</td>
             <td>
@@ -126,6 +164,15 @@ function exportCsv() {
   margin-left: auto;
   color: #74818c;
   font-size: 12px;
+}
+
+.stale-alert,
+.excluded-alert {
+  margin-bottom: 12px;
+}
+
+.stale-actions {
+  margin-top: 8px;
 }
 
 .print-sheet {
