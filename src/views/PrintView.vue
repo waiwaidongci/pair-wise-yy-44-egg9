@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { useWorkshopStore } from '../stores/workshop'
 
@@ -8,14 +8,26 @@ const includeNotes = ref(true)
 const includeRoutes = ref(true)
 const includeComments = ref(false)
 
+const sortedManifest = computed(() => [...store.printManifest].sort((a, b) => a.time.localeCompare(b.time)))
+const generatedAt = ref(new Date().toLocaleString('zh-CN'))
+
 function print() {
+  if (!store.baseline) {
+    ElMessage.warning('尚未锁定演出基线，打印清单为空')
+    return
+  }
   window.print()
 }
 
 function exportCsv() {
+  if (!store.baseline) {
+    ElMessage.warning('尚未锁定演出基线，无法导出')
+    return
+  }
   const rows = [
-    ['编号', '时间码', '场景', '提示', '部门', '责任', '路线节点', '状态'],
-    ...store.cues.map((cue) => [
+    ['基准号', '编号', '时间码', '场景', '提示', '部门', '责任', '路线节点'],
+    ...sortedManifest.value.map((cue) => [
+      store.baseline?.number ?? '',
       cue.id,
       cue.time,
       `${cue.act}/${cue.scene}`,
@@ -23,17 +35,16 @@ function exportCsv() {
       cue.department,
       cue.owner,
       cue.route.map((point) => `${point.x},${point.y}`).join(' > '),
-      cue.status,
     ]),
   ]
-  const csv = `\uFEFF${rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(',')).join('\n')}`
+  const csv = `﻿${rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(',')).join('\n')}`
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
   const link = document.createElement('a')
   link.href = url
-  link.download = `潮汐来信-走位表-${store.revision}.csv`
+  link.download = `执行清单-${store.baseline.number}.csv`
   link.click()
   URL.revokeObjectURL(url)
-  ElMessage.success('走位表已导出')
+  ElMessage.success('已按锁定基线导出执行清单 CSV')
 }
 </script>
 
@@ -43,20 +54,42 @@ function exportCsv() {
       <div>
         <p class="eyebrow">PRINT / 演出文档</p>
         <h1>走位表与执行清单</h1>
-        <p class="muted">打印版仅包含已选信息，固定 A4 横向布局，适合舞台监督工作台使用。</p>
+        <p class="muted">打印清单只取锁定基线快照；未确认与待处置提示不会出现，时间/路线/部门变更后需重新确认并重锁。</p>
       </div>
       <div class="actions">
-        <el-button @click="exportCsv">导出 CSV</el-button>
-        <el-button type="primary" @click="print">打印 / 导出 PDF</el-button>
+        <el-button @click="$router.push('/handoff')">场次交接台</el-button>
+        <el-button @click="exportCsv" :disabled="!store.baseline">导出 CSV</el-button>
+        <el-button type="primary" :disabled="!store.baseline" @click="print">打印 / 导出 PDF</el-button>
       </div>
     </div>
+
+    <el-alert
+      v-if="!store.baseline"
+      class="no-print"
+      type="info"
+      show-icon
+      :closable="false"
+      title="尚无锁定基线"
+      description="请先确认各条提示（时间/路线/部门），在场次交接台或排练脚本锁定基线后，此处才会生成打印清单。"
+    />
+    <el-alert
+      v-else-if="store.manifestStale"
+      class="no-print"
+      type="warning"
+      show-icon
+      :closable="false"
+      title="打印内容已失效，需重算"
+      description="基线已解锁或其中提示的时间/路线/部门发生变更；当前仍显示上次锁定快照，重新确认并锁定后清单才会更新。"
+    />
 
     <div class="print-options panel no-print">
       <strong>文档内容</strong>
       <el-checkbox v-model="includeNotes">执行说明</el-checkbox>
       <el-checkbox v-model="includeRoutes">路线坐标</el-checkbox>
       <el-checkbox v-model="includeComments">未解决留言</el-checkbox>
-      <span class="print-revision">版本 {{ store.revision }} · 生成于 {{ new Date().toLocaleString('zh-CN') }}</span>
+      <span class="print-revision">
+        基线 {{ store.baseline?.number ?? '—' }} · 清单 {{ sortedManifest.length }} 条
+      </span>
     </div>
 
     <article class="print-sheet">
@@ -66,13 +99,14 @@ function exportCsv() {
           <h2>《潮汐来信》执行清单</h2>
         </div>
         <dl>
-          <div><dt>排练日</dt><dd>2026-10-08</dd></div>
-          <div><dt>版本</dt><dd>{{ store.revision }}</dd></div>
+          <div><dt>基准号</dt><dd>{{ store.baseline?.number ?? '未锁定' }}</dd></div>
+          <div><dt>锁定时间</dt><dd>{{ store.baseline?.lockedAt ?? '—' }}</dd></div>
+          <div><dt>版本</dt><dd>{{ store.baseline?.revision ?? '—' }}</dd></div>
           <div><dt>场地</dt><dd>上海大剧院 · 大剧场</dd></div>
         </dl>
       </header>
 
-      <table>
+      <table v-if="sortedManifest.length">
         <thead>
           <tr>
             <th>时间码</th>
@@ -80,11 +114,10 @@ function exportCsv() {
             <th>执行提示</th>
             <th>部门 / 责任</th>
             <th>时长</th>
-            <th>状态</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="cue in [...store.cues].sort((a, b) => a.time.localeCompare(b.time))" :key="cue.id">
+          <tr v-for="cue in sortedManifest" :key="cue.id">
             <td class="mono">{{ cue.time }}</td>
             <td>{{ cue.act }} / {{ cue.scene }}</td>
             <td>
@@ -95,12 +128,23 @@ function exportCsv() {
             </td>
             <td>{{ cue.department }}<br /><small>{{ cue.owner }}</small></td>
             <td>{{ cue.duration }} 秒</td>
-            <td>{{ cue.status }}</td>
           </tr>
         </tbody>
       </table>
+      <div v-else class="empty-sheet">基线锁定后，已确认提示将在此输出。</div>
+
+      <section v-if="store.excludedFromManifest.length" class="excluded no-print">
+        <h4>未进入或已脱节于本清单（{{ store.excludedFromManifest.length }}）</h4>
+        <ul>
+          <li v-for="item in store.excludedFromManifest" :key="item.cue.id">
+            <strong>{{ item.cue.id }}</strong> {{ item.cue.title }}
+            <em>{{ item.reason }}</em>
+          </li>
+        </ul>
+      </section>
 
       <footer class="sheet-foot">
+        <span>基准号：{{ store.baseline?.number ?? '—' }}</span>
         <span>舞台监督：________________</span>
         <span>技术总监：________________</span>
         <span>制作人：________________</span>
@@ -118,7 +162,7 @@ function exportCsv() {
   display: flex;
   align-items: center;
   gap: 18px;
-  margin-bottom: 14px;
+  margin: 14px 0;
   padding: 12px 15px;
 }
 
@@ -221,6 +265,39 @@ td em {
   color: #1d7371;
   font-family: ui-monospace, monospace;
   font-weight: 700;
+}
+
+.empty-sheet {
+  margin-top: 60px;
+  color: #8a959d;
+  text-align: center;
+}
+
+.excluded {
+  margin-top: 22px;
+  padding: 14px 16px;
+  border-left: 3px solid #d8912d;
+  background: #fff8e8;
+}
+
+.excluded h4 {
+  margin: 0 0 8px;
+  font-size: 13px;
+}
+
+.excluded ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: #687582;
+}
+
+.excluded em {
+  margin-left: 8px;
+  color: #b05a2b;
+  font-style: normal;
 }
 
 .sheet-foot {

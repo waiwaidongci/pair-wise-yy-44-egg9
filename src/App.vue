@@ -12,6 +12,7 @@ const nav = [
   { to: '/', label: '巡演总览', icon: '总' },
   { to: '/stage', label: '舞台走位', icon: '图' },
   { to: '/script', label: '排练脚本', icon: '序' },
+  { to: '/handoff', label: '场次交接', icon: '接' },
   { to: '/print', label: '打印中心', icon: '印' },
 ]
 </script>

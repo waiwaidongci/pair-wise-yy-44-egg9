@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { useWorkshopStore } from '../stores/workshop'
+import { useWorkshopStore, isConfirmedValid } from '../stores/workshop'
 
 const store = useWorkshopStore()
 const query = ref('')
@@ -14,15 +14,29 @@ const script = computed(() =>
     .sort((a, b) => a.time.localeCompare(b.time)),
 )
 
+const pendingPairIds = computed(() => {
+  const ids = new Set<string>()
+  store.pendingPairs.forEach((pair) => ids.add(pair.masterCueId).add(pair.offlineCueId))
+  return ids
+})
+
 function confirmCue(id: string) {
   store.selectedId = id
-  store.updateCue({ status: '已确认' })
-  ElMessage.success(`${id} 已并入当前排练脚本`)
+  store.confirmCue(id)
+  ElMessage.success(`${id} 已确认；时间/路线/部门一旦再改，确认立即失效`)
 }
 
 function lock() {
+  if (store.pendingPairs.length) {
+    ElMessage.warning('存在双方改动的双份提示待处置，处置并重新确认后才能锁定基线')
+    return
+  }
+  if (!store.baselineCandidates.length) {
+    ElMessage.warning('没有有效确认的提示，无法锁定基线')
+    return
+  }
   store.lockBaseline()
-  ElMessage.success('演出基线已锁定，后续修改将从新分支开始')
+  ElMessage.success(`演出基线已锁定（${store.baseline?.number}），打印清单按此快照输出`)
 }
 </script>
 
@@ -35,18 +49,38 @@ function lock() {
         <p class="muted">提示与走位按时间码串联；未确认节点不会进入锁定基线。</p>
       </div>
       <div class="actions">
-        <el-button :disabled="store.locked" @click="lock">锁定演出基线</el-button>
+        <el-button :disabled="!store.canLockBaseline" @click="lock">锁定演出基线</el-button>
         <el-button v-if="store.locked" type="warning" plain @click="store.unlockBaseline">解锁修订</el-button>
-        <el-button type="primary" @click="$router.push('/print')">生成执行清单</el-button>
+        <el-button @click="$router.push('/handoff')">场次交接台</el-button>
+        <el-button type="primary" :disabled="!store.baseline" @click="$router.push('/print')">生成执行清单</el-button>
       </div>
     </div>
+
+    <el-alert
+      v-if="store.pendingPairs.length"
+      class="handoff-alert"
+      type="error"
+      show-icon
+      :closable="false"
+      title="存在双方同改的双份提示待处置"
+      description="待处置提示不会进入基线或打印清单，请到场次交接台选择保留版本并重新确认。"
+    >
+      <template #default>
+        <el-button size="small" type="warning" @click="$router.push('/handoff')">前往处置</el-button>
+      </template>
+    </el-alert>
 
     <div class="panel script-toolbar">
       <el-input v-model="query" clearable placeholder="搜索提示、角色或说明" style="max-width: 320px" />
       <el-segmented v-model="selectedAct" :options="acts" />
       <div class="baseline-status">
         <span class="status-dot" :style="{ background: store.locked ? '#41936b' : '#d68c27' }" />
-        {{ store.locked ? `基线 ${store.revision} 已锁定` : `${store.revision} · ${store.cues.filter((cue) => cue.status !== '已确认').length} 项待确认` }}
+        <template v-if="store.baseline">
+          基线 {{ store.baseline.number }} {{ store.locked ? '已锁定' : '已解锁 · 打印内容失效，重锁后重算' }}
+        </template>
+        <template v-else>
+          {{ store.revision }} · {{ store.unconfirmedCues.length }} 项未确认 / {{ store.pendingPairs.length }} 对待处置
+        </template>
       </div>
     </div>
 
@@ -61,13 +95,21 @@ function lock() {
             <i />
             <b v-if="index < script.length - 1" />
           </div>
-          <div class="script-card panel">
+          <div class="script-card panel" :class="{ stale: cue.status === '已确认' && !isConfirmedValid(cue), conflict: pendingPairIds.has(cue.id) }">
             <div class="script-card-head">
               <div>
-                <span>{{ cue.id }} · {{ cue.act }} / {{ cue.scene }}</span>
+                <span>{{ cue.id }} · {{ cue.act }} / {{ cue.scene }} · <em class="origin-tag">{{ cue.origin ?? '主控' }}</em></span>
                 <h3>{{ cue.title }}</h3>
               </div>
-              <el-tag :type="cue.status === '已确认' ? 'success' : cue.status === '待确认' ? 'warning' : 'info'" effect="plain">
+              <el-tag
+                v-if="pendingPairIds.has(cue.id)"
+                type="danger"
+                effect="dark"
+              >双份待处置 · {{ cue.origin === '冲突-离线' ? '离线版' : '主控版' }}</el-tag>
+              <el-tag v-else-if="cue.status === '已确认' && !isConfirmedValid(cue)" type="danger" effect="plain">
+                确认已失效
+              </el-tag>
+              <el-tag v-else :type="cue.status === '已确认' ? 'success' : cue.status === '待确认' ? 'warning' : 'info'" effect="plain">
                 {{ cue.status }}
               </el-tag>
             </div>
@@ -77,11 +119,21 @@ function lock() {
               <span>部门：{{ cue.department }}</span>
               <span>路线：{{ cue.route.length }} 节点</span>
               <span v-if="cue.comments.length">留言：{{ cue.comments.length }}</span>
+              <span v-if="isConfirmedValid(cue)" class="confirmed-at">确认于 {{ cue.confirmedAt }}</span>
             </div>
             <div class="script-actions">
               <el-button size="small" @click="store.selectedId = cue.id; $router.push('/stage')">编辑走位</el-button>
-              <el-button v-if="cue.status !== '已确认'" size="small" type="primary" plain @click="confirmCue(cue.id)">确认节点</el-button>
-              <span v-else class="confirmed">已纳入 {{ store.revision }}</span>
+              <el-button
+                v-if="!isConfirmedValid(cue) && !pendingPairIds.has(cue.id)"
+                size="small"
+                type="primary"
+                plain
+                @click="confirmCue(cue.id)"
+              >{{ cue.status === '已确认' ? '重新确认' : '确认节点' }}</el-button>
+              <el-button v-if="pendingPairIds.has(cue.id)" size="small" type="warning" @click="$router.push('/handoff')">
+                前往处置冲突
+              </el-button>
+              <span v-else-if="isConfirmedValid(cue)" class="confirmed">已确认，可入基线 {{ store.baseline?.number ?? '' }}</span>
             </div>
           </div>
         </article>
@@ -89,24 +141,24 @@ function lock() {
 
       <aside class="panel version-panel">
         <div class="panel-head">
-          <h3>版本记录</h3>
-          <span class="muted">自动保存</span>
+          <h3>版本与基线</h3>
+          <span class="muted">交接记录</span>
         </div>
         <div class="version-list">
           <div class="version active">
-            <span>当前草稿</span>
+            <span>当前工作版本</span>
             <strong>{{ store.revision }}</strong>
             <small>{{ store.lastSaved }} · {{ store.cues.length }} 个节点</small>
           </div>
-          <div class="version">
-            <span>舞台调度修订</span>
-            <strong>R11</strong>
-            <small>09-27 14:16 · 陈曦</small>
+          <div v-if="store.baseline" class="version" :class="{ locked: store.locked }">
+            <span>锁定基线（打印清单）</span>
+            <strong>{{ store.baseline.number }}</strong>
+            <small>{{ store.baseline.lockedAt }} · {{ store.printManifest.length }} 条</small>
           </div>
-          <div class="version">
-            <span>灯光提示更新</span>
-            <strong>R10</strong>
-            <small>09-26 18:42 · 王灯控</small>
+          <div v-for="show in store.historyShows.slice(0, 3)" :key="show.showName" class="version history">
+            <span>历史场次（无基准号迁移）</span>
+            <strong>{{ show.revision }}</strong>
+            <small>{{ show.showName }} · {{ show.cues.length }} 条 · 原记录保留</small>
           </div>
         </div>
         <div class="version-actions">
@@ -125,6 +177,29 @@ function lock() {
   gap: 14px;
   margin-bottom: 18px;
   padding: 12px 14px;
+}
+
+.handoff-alert {
+  margin-bottom: 14px;
+}
+
+.script-card.stale {
+  border-left: 3px solid #cf5b3f;
+}
+
+.script-card.conflict {
+  border-left: 3px solid #b23b31;
+  background: #fdf3f2;
+}
+
+.origin-tag {
+  color: #8a5a18;
+  font-style: normal;
+  font-size: 10px;
+}
+
+.confirmed-at {
+  color: #34805e !important;
 }
 
 .baseline-status {

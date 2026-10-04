@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { useQuery } from '@tanstack/vue-query'
 import axios from 'axios'
-import { useWorkshopStore } from '../stores/workshop'
+import { useWorkshopStore, isConfirmedValid } from '../stores/workshop'
 
 const store = useWorkshopStore()
 const { data: project } = useQuery({
@@ -17,7 +17,7 @@ const { data: project } = useQuery({
   },
 })
 
-const pending = computed(() => store.cues.filter((cue) => cue.status !== '已确认').length)
+const pending = computed(() => store.cues.filter((cue) => !isConfirmedValid(cue)).length)
 const comments = computed(() => store.cues.reduce((total, cue) => total + cue.comments.filter((item) => !item.resolved).length, 0))
 const totalMinutes = computed(() => Math.round(store.cues.reduce((sum, cue) => sum + cue.duration, 0) / 60))
 const byDepartment = computed(() =>
@@ -26,7 +26,12 @@ const byDepartment = computed(() =>
     count: store.cues.filter((cue) => cue.department === department).length,
   })),
 )
-const nextCues = computed(() => [...store.cues].sort((a, b) => a.time.localeCompare(b.time)).slice(0, 4))
+const nextCues = computed(() =>
+  [...store.cues]
+    .filter((cue) => !cue.pairId)
+    .sort((a, b) => a.time.localeCompare(b.time))
+    .slice(0, 4),
+)
 </script>
 
 <template>
@@ -39,9 +44,29 @@ const nextCues = computed(() => [...store.cues].sort((a, b) => a.time.localeComp
       </div>
       <div class="actions">
         <el-button @click="store.toggleOffline">{{ store.isOffline ? '恢复在线' : '模拟离线' }}</el-button>
+        <el-button type="warning" plain @click="$router.push('/handoff')">场次交接台</el-button>
         <el-button type="primary" @click="$router.push('/stage')">进入舞台工作区</el-button>
       </div>
     </div>
+
+    <el-alert
+      v-if="store.pendingPairs.length || store.offlineChanges.length || store.lastMergeError"
+      class="handoff-banner"
+      :type="store.pendingPairs.length ? 'error' : 'warning'"
+      show-icon
+      :closable="false"
+    >
+      <template #title>
+        <span v-if="store.pendingPairs.length">
+          {{ store.pendingPairs.length }} 对双方同改提示待处置，处置并重新确认前不进基线、不进打印清单。
+        </span>
+        <span v-else-if="store.lastMergeError">上次回网合并失败，已恢复到最后确认的提示，可在交接台重试。</span>
+        <span v-else>{{ store.offlineChanges.length }} 条离线改动待回网合并。</span>
+        <el-button size="small" :type="store.pendingPairs.length ? 'danger' : 'warning'" @click="$router.push('/handoff')">
+          前往场次交接
+        </el-button>
+      </template>
+    </el-alert>
 
     <div class="metric-grid">
       <article class="metric">
@@ -50,14 +75,17 @@ const nextCues = computed(() => [...store.cues].sort((a, b) => a.time.localeComp
         <small>覆盖三幕 {{ new Set(store.cues.map((cue) => cue.scene)).size }} 个场景</small>
       </article>
       <article class="metric">
-        <span>待确认事项</span>
-        <strong class="amber">{{ pending }}</strong>
-        <small>确认后进入演出基线</small>
+        <span>待确认 / 待处置</span>
+        <strong class="amber">{{ pending }}<small> / {{ store.pendingPairs.length }} 对</small></strong>
+        <small>确认且无待处置才进基线</small>
       </article>
       <article class="metric">
-        <span>未解决留言</span>
-        <strong class="red">{{ comments }}</strong>
-        <small>跨部门协同处理中</small>
+        <span>锁定基线 · 打印清单</span>
+        <strong :style="{ fontSize: '18px' }">{{ store.baseline?.number ?? '未锁定' }}</strong>
+        <small>
+          {{ store.printManifest.length }} 条入清单
+          <em v-if="store.manifestStale" class="red"> · 已失效待重算</em>
+        </small>
       </article>
       <article class="metric">
         <span>计划时长</span>
@@ -77,10 +105,13 @@ const nextCues = computed(() => [...store.cues].sort((a, b) => a.time.localeComp
             <time>{{ cue.time }}</time>
             <span>
               <strong>{{ cue.title }}</strong>
-              <small>{{ cue.act }} / {{ cue.scene }} · {{ cue.owner }}</small>
+              <small>{{ cue.act }} / {{ cue.scene }} · {{ cue.owner }} · {{ cue.origin ?? '主控' }}</small>
             </span>
-            <el-tag :type="cue.status === '已确认' ? 'success' : cue.status === '待确认' ? 'warning' : 'info'" effect="plain">
-              {{ cue.status }}
+            <el-tag
+              :type="isConfirmedValid(cue) ? 'success' : cue.status === '待确认' ? 'warning' : 'info'"
+              effect="plain"
+            >
+              {{ isConfirmedValid(cue) ? '已确认' : cue.status === '已确认' ? '确认失效' : cue.status }}
             </el-tag>
           </button>
         </div>
@@ -109,6 +140,10 @@ const nextCues = computed(() => [...store.cues].sort((a, b) => a.time.localeComp
 </template>
 
 <style scoped>
+.handoff-banner {
+  margin-bottom: 14px;
+}
+
 .amber {
   color: #b77014 !important;
 }

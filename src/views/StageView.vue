@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { useWorkshopStore, type Cue, type Department } from '../stores/workshop'
+import { useWorkshopStore, isConfirmedValid, type Cue, type Department } from '../stores/workshop'
 
 const store = useWorkshopStore()
 const commentText = ref('')
@@ -12,6 +12,11 @@ const acts = ['全部', '第一幕', '第二幕', '第三幕']
 const cue = computed(() => store.selectedCue)
 const routePoints = computed(() => cue.value?.route.map((point) => `${point.x},${point.y}`).join(' ') ?? '')
 const conflictCues = computed(() => new Set(store.conflicts.map((item) => item.id)))
+const pendingPairIds = computed(() => {
+  const ids = new Set<string>()
+  store.pendingPairs.forEach((pair) => ids.add(pair.masterCueId).add(pair.offlineCueId))
+  return ids
+})
 
 function selectCue(item: Cue) {
   store.selectedId = item.id
@@ -23,13 +28,16 @@ function addWaypoint(event: MouseEvent) {
   const rect = target.getBoundingClientRect()
   const x = Math.round(((event.clientX - rect.left) / rect.width) * 100)
   const y = Math.round(((event.clientY - rect.top) / rect.height) * 100)
-  store.addWaypoint({ x, y })
-  ElMessage.success('已追加路线节点')
+  if (store.addWaypoint({ x, y })) ElMessage.success('已追加路线节点')
 }
 
 function saveCue() {
   localStorage.setItem('stage-scheduler-last-action', new Date().toISOString())
-  ElMessage.success(store.isOffline ? '已保存到离线草稿' : `已同步 ${store.revision}`)
+  ElMessage.success(
+    store.isOffline
+      ? `离线草稿已记录（${store.offlineChanges.length} 条待回网合并），改时间/路线/部门会使确认失效`
+      : `已同步 ${store.revision}`,
+  )
 }
 
 function submitComment() {
@@ -60,13 +68,31 @@ function updateCue(key: keyof Cue, value: unknown) {
     </div>
 
     <el-alert
-      v-if="store.conflicts.length"
+      v-if="store.pendingPairs.length"
+      class="conflict-alert"
+      type="error"
+      show-icon
+      :closable="false"
+      :title="`${store.pendingPairs.length} 对双方同改提示待处置，未处置不进基线/打印清单`"
+    >
+      <el-button size="small" type="warning" @click="$router.push('/handoff')">前往场次交接处置</el-button>
+    </el-alert>
+    <el-alert
+      v-else-if="store.conflicts.length"
       class="conflict-alert"
       type="warning"
       show-icon
       :closable="false"
       :title="`发现 ${store.conflicts.length} 个同时触发节点`"
       description="系统已高亮冲突提示，请在右侧检查触发时间与部门优先级。"
+    />
+    <el-alert
+      v-if="cue && cue.status === '已确认' && !isConfirmedValid(cue)"
+      class="conflict-alert"
+      type="warning"
+      show-icon
+      :closable="false"
+      :title="`${cue.id} 的确认已失效（时间/路线/部门被改动），请重新确认后才会重进基线与打印清单`"
     />
 
     <div class="toolbar panel">
@@ -142,13 +168,17 @@ function updateCue(key: keyof Cue, value: unknown) {
         <div v-if="cue" class="editor">
           <div class="editor-title">
             <div>
-              <span>{{ cue.id }} · {{ cue.act }}</span>
+              <span>{{ cue.id }} · {{ cue.act }} · {{ cue.origin ?? '主控' }}</span>
               <h3>{{ cue.title }}</h3>
             </div>
-            <el-tag :type="cue.status === '已确认' ? 'success' : 'warning'" effect="plain">{{ cue.status }}</el-tag>
+            <el-tag v-if="pendingPairIds.has(cue.id)" type="danger" effect="dark">
+              双份待处置 · {{ cue.origin === '冲突-离线' ? '离线版' : '主控版' }}
+            </el-tag>
+            <el-tag v-else-if="cue.status === '已确认' && !isConfirmedValid(cue)" type="danger" effect="plain">确认已失效</el-tag>
+            <el-tag v-else :type="cue.status === '已确认' ? 'success' : 'warning'" effect="plain">{{ cue.status }}</el-tag>
           </div>
 
-          <el-form label-position="top" size="small" :disabled="store.locked">
+          <el-form label-position="top" size="small" :disabled="store.locked || pendingPairIds.has(cue.id)">
             <div class="form-grid">
               <el-form-item label="场景">
                 <el-input :model-value="cue.scene" @update:model-value="updateCue('scene', $event)" />
@@ -211,10 +241,10 @@ function updateCue(key: keyof Cue, value: unknown) {
           v-for="item in [...store.filteredCues].sort((a, b) => a.time.localeCompare(b.time))"
           :key="item.id"
           class="cue-card"
-          :class="{ active: item.id === store.selectedId, conflict: conflictCues.has(item.id) }"
+          :class="{ active: item.id === store.selectedId, conflict: conflictCues.has(item.id), pair: pendingPairIds.has(item.id) }"
           @click="selectCue(item)"
         >
-          <span>{{ item.id }} · {{ item.department }}</span>
+          <span>{{ item.id }} · {{ item.department }} · {{ item.origin ?? '主控' }}</span>
           <strong>{{ item.title }}</strong>
           <small>{{ item.time }} · {{ item.duration }} 秒</small>
         </button>
@@ -530,6 +560,11 @@ function updateCue(key: keyof Cue, value: unknown) {
 
 .cue-card.conflict {
   border-left: 4px solid #cf5b3f;
+}
+
+.cue-card.pair {
+  border: 1px solid #cf5b3f;
+  background: #fdf3f2;
 }
 
 .cue-card span,
